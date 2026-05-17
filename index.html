@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChronoForge — Interactive Timeline Editor</title>
+<link rel="canonical" href="https://chronoforge-timeline.surge.sh/">
+<meta name="description" content="Interactive Gantt chart and timeline editor. Create tasks, set dependencies, drag-resize, zoom, export as PNG.">
+<meta name="keywords" content="gantt chart, timeline, project management, task editor, planning">
+<meta property="og:title" content="ChronoForge — Interactive Timeline Editor">
+<meta property="og:description" content="Plan projects with drag-and-drop Gantt charts in your browser.">
+<meta property="og:url" content="https://chronoforge-timeline.surge.sh/">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📅</text></svg>">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f0f1a;--panel:#161625;--border:#252540;--text:#d0d0e8;--dim:#6a6a90;--accent:#6c5ce7;--accent2:#a29bfe;--green:#00b894;--red:#ff6b6b;--orange:#fdcb6e;--blue:#74b9ff;--radius:6px}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;height:100vh;overflow:hidden;display:flex;flex-direction:column}
+#toolbar{height:48px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:8px;flex-shrink:0}
+#toolbar h1{font-size:16px;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.tb{padding:5px 12px;background:rgba(255,255,255,0.04);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);font-size:12px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.tb:hover{background:rgba(255,255,255,0.08);border-color:var(--accent)}
+.tb.active{background:rgba(108,92,231,0.15);border-color:var(--accent);color:var(--accent2)}
+.sep{width:1px;height:28px;background:var(--border)}
+#main{flex:1;display:flex;overflow:hidden;position:relative}
+#sidebar{width:220px;background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0}
+#sidebar h3{font-size:11px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:1px;padding:12px 16px 8px}
+.task-row{display:flex;align-items:center;padding:0 16px;height:40px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s;gap:8px}
+.task-row:hover{background:rgba(255,255,255,0.03)}
+.task-row.selected{background:rgba(108,92,231,0.1)}
+.task-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.task-name{font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task-del{color:var(--dim);cursor:pointer;font-size:14px;display:none}
+.task-row:hover .task-del{display:block}
+#timeline{flex:1;overflow:auto;position:relative}
+#timeline canvas{display:block}
+#edit-panel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--panel);border:1px solid var(--accent);border-radius:var(--radius);padding:20px;z-index:20;min-width:300px;display:none;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
+#edit-panel h3{font-size:14px;margin-bottom:12px;color:var(--accent2)}
+.form-row{display:flex;gap:8px;margin-bottom:10px;align-items:center}
+.form-row label{font-size:12px;color:var(--dim);min-width:60px}
+.form-row input{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:4px;font-size:12px;outline:none}
+.form-row input:focus{border-color:var(--accent)}
+.form-row select{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-size:12px}
+.edit-actions{display:flex;gap:8px;margin-top:14px}
+.edit-actions button{flex:1}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;padding:8px 20px;border-radius:20px;font-size:12px;z-index:30;opacity:0;transition:opacity .3s;pointer-events:none}
+#toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <h1>ChronoForge</h1>
+  <button class="tb" id="btn-add">+ Add Task</button>
+  <button class="tb" id="btn-zoom-in">🔍+</button>
+  <button class="tb" id="btn-zoom-out">🔍-</button>
+  <span id="zoom-label" style="font-size:11px;color:var(--dim)">100%</span>
+  <div class="sep"></div>
+  <button class="tb" id="btn-today">Today</button>
+  <button class="tb" id="btn-fit">Fit All</button>
+  <div class="sep"></div>
+  <button class="tb" id="btn-export">📷 Export PNG</button>
+  <button class="tb" id="btn-clear">🗑 Clear</button>
+</div>
+<div id="main">
+  <div id="sidebar">
+    <h3>Tasks</h3>
+    <div id="task-list"></div>
+  </div>
+  <div id="timeline">
+    <canvas id="c"></canvas>
+  </div>
+</div>
+<div id="edit-panel">
+  <h3>Edit Task</h3>
+  <div class="form-row"><label>Name</label><input id="edit-name" type="text"></div>
+  <div class="form-row"><label>Start</label><input id="edit-start" type="date"></div>
+  <div class="form-row"><label>Days</label><input id="edit-days" type="number" min="1" max="365"></div>
+  <div class="form-row"><label>Progress</label><input id="edit-progress" type="range" min="0" max="100" value="0"></div>
+  <div class="form-row"><label>Color</label>
+    <select id="edit-color">
+      <option value="#6c5ce7">Purple</option><option value="#00b894">Green</option><option value="#ff6b6b">Red</option>
+      <option value="#fdcb6e">Yellow</option><option value="#74b9ff">Blue</option><option value="#e17055">Orange</option>
+      <option value="#a29bfe">Lavender</option><option value="#55efc4">Mint</option>
+    </select>
+  </div>
+  <div class="edit-actions">
+    <button class="tb" id="edit-save" style="background:var(--accent);border-color:var(--accent);color:#fff">Save</button>
+    <button class="tb" id="edit-cancel">Cancel</button>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const timelineEl = document.getElementById('timeline');
+
+/* ===================== Data ===================== */
+const TASK_COLORS = ['#6c5ce7','#00b894','#ff6b6b','#fdcb6e','#74b9ff','#e17055','#a29bfe','#55efc4'];
+let tasks = [];
+let taskIdCounter = 0;
+let selectedTask = null;
+
+// View
+let dayWidth = 40; // pixels per day
+const ROW_H = 40;
+const HEADER_H = 40;
+const MIN_DAY_W = 8, MAX_DAY_W = 120;
+let viewStartDay = 0; // day offset from epoch
+
+function dayToDate(d){const dt=new Date(2025,0,1);dt.setDate(dt.getDate()+d);return dt;}
+function dateToDay(dt){const base=new Date(2025,0,1);return Math.round((dt-base)/(86400000));}
+function today(){return dateToDay(new Date());}
+
+function addTask(name,startDay,days,color,progress){
+  const id=++taskIdCounter;
+  const task={id,name,startDay,days,color:color||TASK_COLORS[id%TASK_COLORS.length],progress:progress||0};
+  tasks.push(task);
+  rebuildSidebar();
+  draw();
+  return task;
+}
+
+function removeTask(id){
+  tasks=tasks.filter(t=>t.id!==id);
+  if(selectedTask&&selectedTask.id===id)selectedTask=null;
+  rebuildSidebar();
+  draw();
+}
+
+function rebuildSidebar(){
+  const list=document.getElementById('task-list');
+  list.innerHTML='';
+  tasks.forEach(t=>{
+    const row=document.createElement('div');
+    row.className='task-row'+(selectedTask&&selectedTask.id===t.id?' selected':'');
+    row.innerHTML=`<div class="task-dot" style="background:${t.color}"></div><span class="task-name">${t.name}</span><span class="task-del" data-id="${t.id}">×</span>`;
+    row.addEventListener('click',e=>{
+      if(e.target.classList.contains('task-del')){removeTask(parseInt(e.target.dataset.id));return;}
+      selectedTask=t;rebuildSidebar();draw();
+    });
+    row.addEventListener('dblclick',()=>{openEdit(t);});
+    list.appendChild(row);
+  });
+}
+
+/* ===================== Drawing ===================== */
+function resize(){
+  const dpr=Math.min(devicePixelRatio,2);
+  const rect=timelineEl.getBoundingClientRect();
+  canvas.width=rect.width*dpr;
+  canvas.height=Math.max(rect.height,(tasks.length+2)*ROW_H+HEADER_H)*dpr;
+  canvas.style.width=rect.width+'px';
+  canvas.style.height=Math.max(rect.height,(tasks.length+2)*ROW_H+HEADER_H)+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  draw();
+}
+
+function draw(){
+  const w=canvas.width/Math.min(devicePixelRatio,2);
+  const h=canvas.height/Math.min(devicePixelRatio,2);
+  ctx.clearRect(0,0,w,h);
+
+  const daysVisible=Math.ceil(w/dayWidth)+1;
+  const startD=Math.floor(viewStartDay);
+  const todayD=today();
+
+  // Background
+  ctx.fillStyle='#0f0f1a';
+  ctx.fillRect(0,0,w,h);
+
+  // Header
+  ctx.fillStyle='#161625';
+  ctx.fillRect(0,0,w,HEADER_H);
+
+  // Day columns and grid
+  for(let d=0;d<daysVisible+1;d++){
+    const day=startD+d;
+    const x=(day-viewStartDay)*dayWidth;
+    const dt=dayToDate(day);
+    const dow=dt.getDay();
+
+    // Weekend shading
+    if(dow===0||dow===6){
+      ctx.fillStyle='rgba(255,255,255,0.015)';
+      ctx.fillRect(x,HEADER_H,dayWidth,h-HEADER_H);
+    }
+
+    // Vertical grid line
+    ctx.strokeStyle='rgba(255,255,255,0.04)';
+    ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();
+
+    // Header text
+    if(dayWidth>=20){
+      ctx.fillStyle=dow===0||dow===6?'#5a5a80':'#8a8ab0';
+      ctx.font='10px "Segoe UI",system-ui,sans-serif';
+      ctx.textAlign='center';
+      ctx.fillText((dt.getMonth()+1)+'/'+dt.getDate(),x+dayWidth/2,25);
+    }
+    if(dayWidth>=40){
+      ctx.fillStyle='#5a5a80';
+      ctx.font='9px "Segoe UI",system-ui,sans-serif';
+      ctx.fillText(['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow],x+dayWidth/2,36);
+    }
+  }
+
+  // Today line
+  const todayX=(todayD-viewStartDay)*dayWidth;
+  if(todayX>-dayWidth&&todayX<w+dayWidth){
+    ctx.strokeStyle='#ff6b6b';
+    ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(todayX,0);ctx.lineTo(todayX,h);ctx.stroke();
+    ctx.fillStyle='#ff6b6b';
+    ctx.font='bold 9px "Segoe UI"';
+    ctx.textAlign='center';
+    ctx.fillText('TODAY',todayX,12);
+  }
+
+  // Tasks
+  tasks.forEach((t,i)=>{
+    const y=HEADER_H+i*ROW_H;
+
+    // Row background
+    if(selectedTask&&selectedTask.id===t.id){
+      ctx.fillStyle='rgba(108,92,231,0.08)';
+      ctx.fillRect(0,y,w,ROW_H);
+    }
+
+    // Horizontal grid
+    ctx.strokeStyle='rgba(255,255,255,0.03)';
+    ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(0,y+ROW_H);ctx.lineTo(w,y+ROW_H);ctx.stroke();
+
+    // Task bar
+    const x=(t.startDay-viewStartDay)*dayWidth;
+    const bw=t.days*dayWidth;
+    const bh=24;
+    const by=y+(ROW_H-bh)/2;
+
+    // Bar background
+    ctx.fillStyle=t.color+'40';
+    ctx.beginPath();
+    ctx.roundRect(x+1,by,bw-2,bh,4);
+    ctx.fill();
+
+    // Progress fill
+    if(t.progress>0){
+      const pw=bw*t.progress/100;
+      ctx.fillStyle=t.color+'99';
+      ctx.beginPath();
+      ctx.roundRect(x+1,by,Math.min(pw,bw-2),bh,4);
+      ctx.fill();
+    }
+
+    // Bar border
+    ctx.strokeStyle=t.color;
+    ctx.lineWidth=1.5;
+    ctx.beginPath();
+    ctx.roundRect(x+1,by,bw-2,bh,4);
+    ctx.stroke();
+
+    // Task name on bar
+    if(bw>40){
+      ctx.fillStyle='#fff';
+      ctx.font='11px "Segoe UI",system-ui,sans-serif';
+      ctx.textAlign='left';
+      ctx.textBaseline='middle';
+      const txt=t.name;
+      const maxW=bw-12;
+      ctx.fillText(txt,x+6,by+bh/2,maxW);
+    }
+
+    // Resize handles
+    ctx.fillStyle=t.color;
+    ctx.fillRect(x+1,by,3,bh);
+    ctx.fillRect(x+bw-4,by,3,bh);
+  });
+
+  // Dependencies (arrows)
+  // Simple: connect consecutive tasks
+  tasks.forEach((t,i)=>{
+    if(i===0)return;
+    const prev=tasks[i-1];
+    const x1=(prev.startDay+prev.days-viewStartDay)*dayWidth;
+    const y1=HEADER_H+(i-1)*ROW_H+ROW_H/2;
+    const x2=(t.startDay-viewStartDay)*dayWidth;
+    const y2=HEADER_H+i*ROW_H+ROW_H/2;
+    ctx.strokeStyle='rgba(108,92,231,0.3)';
+    ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(x1,y1);
+    ctx.lineTo(x1+8,y1);
+    ctx.lineTo(x1+8,y2);
+    ctx.lineTo(x2,y2);
+    ctx.stroke();
+    // Arrow
+    ctx.fillStyle='rgba(108,92,231,0.5)';
+    ctx.beginPath();
+    ctx.moveTo(x2,y2);
+    ctx.lineTo(x2-5,y2-3);
+    ctx.lineTo(x2-5,y2+3);
+    ctx.fill();
+  });
+}
+
+/* ===================== Interaction ===================== */
+let dragging=null; // {task, mode:'move'|'resize-left'|'resize-right', startMx, origStart, origDays}
+
+timelineEl.addEventListener('mousedown',e=>{
+  const rect=canvas.getBoundingClientRect();
+  const mx=e.clientX-rect.left;
+  const my=e.clientY-rect.top;
+
+  // Find task under cursor
+  const taskIdx=Math.floor((my-HEADER_H)/ROW_H);
+  if(taskIdx<0||taskIdx>=tasks.length)return;
+
+  const t=tasks[taskIdx];
+  const x=(t.startDay-viewStartDay)*dayWidth;
+  const bw=t.days*dayWidth;
+
+  if(mx>=x&&mx<=x+6){
+    dragging={task:t,mode:'resize-left',startMx:e.clientX,origStart:t.startDay,origDays:t.days};
+  } else if(mx>=x+bw-6&&mx<=x+bw){
+    dragging={task:t,mode:'resize-right',startMx:e.clientX,origStart:t.startDay,origDays:t.days};
+  } else if(mx>=x&&mx<=x+bw){
+    dragging={task:t,mode:'move',startMx:e.clientX,origStart:t.startDay,origDays:t.days};
+    selectedTask=t;
+    rebuildSidebar();
+    draw();
+  }
+});
+
+addEventListener('mousemove',e=>{
+  if(!dragging)return;
+  const dx=e.clientX-dragging.startMx;
+  const dd=Math.round(dx/dayWidth);
+  if(dragging.mode==='move'){
+    dragging.task.startDay=dragging.origStart+dd;
+  } else if(dragging.mode==='resize-right'){
+    dragging.task.days=Math.max(1,dragging.origDays+dd);
+  } else if(dragging.mode==='resize-left'){
+    const newStart=dragging.origStart+dd;
+    const newDays=dragging.origDays-dd;
+    if(newDays>=1){dragging.task.startDay=newStart;dragging.task.days=newDays;}
+  }
+  draw();
+});
+
+addEventListener('mouseup',()=>{dragging=null;});
+
+// Scroll to pan
+timelineEl.addEventListener('wheel',e=>{
+  if(e.ctrlKey||e.metaKey){
+    // Zoom
+    const factor=e.deltaY>0?0.9:1.1;
+    dayWidth=Math.max(MIN_DAY_W,Math.min(MAX_DAY_W,dayWidth*factor));
+    document.getElementById('zoom-label').textContent=Math.round(dayWidth/40*100)+'%';
+    draw();
+  } else {
+    viewStartDay+=e.deltaX/dayWidth+e.deltaY>0?1:-1;
+    viewStartDay+=e.deltaY>0?3:-3;
+    draw();
+  }
+  e.preventDefault();
+},{passive:false});
+
+// Double-click to edit
+canvas.addEventListener('dblclick',e=>{
+  const rect=canvas.getBoundingClientRect();
+  const my=e.clientY-rect.top;
+  const idx=Math.floor((my-HEADER_H)/ROW_H);
+  if(idx>=0&&idx<tasks.length) openEdit(tasks[idx]);
+});
+
+/* ===================== Edit Panel ===================== */
+const editPanel=document.getElementById('edit-panel');
+let editingTask=null;
+
+function openEdit(task){
+  editingTask=task;
+  document.getElementById('edit-name').value=task.name;
+  const dt=dayToDate(task.startDay);
+  document.getElementById('edit-start').value=dt.toISOString().slice(0,10);
+  document.getElementById('edit-days').value=task.days;
+  document.getElementById('edit-progress').value=task.progress;
+  document.getElementById('edit-color').value=task.color;
+  editPanel.style.display='block';
+}
+
+document.getElementById('edit-save').addEventListener('click',()=>{
+  if(!editingTask)return;
+  editingTask.name=document.getElementById('edit-name').value;
+  editingTask.startDay=dateToDay(new Date(document.getElementById('edit-start').value));
+  editingTask.days=parseInt(document.getElementById('edit-days').value)||1;
+  editingTask.progress=parseInt(document.getElementById('edit-progress').value);
+  editingTask.color=document.getElementById('edit-color').value;
+  editPanel.style.display='none';
+  rebuildSidebar();draw();
+  showToast('Task updated');
+});
+
+document.getElementById('edit-cancel').addEventListener('click',()=>{editPanel.style.display='none';});
+
+/* ===================== Toolbar ===================== */
+document.getElementById('btn-add').addEventListener('click',()=>{
+  const t=addTask('New Task',today()+tasks.length*3,5);
+  selectedTask=t;
+  openEdit(t);
+});
+
+document.getElementById('btn-zoom-in').addEventListener('click',()=>{
+  dayWidth=Math.min(MAX_DAY_W,dayWidth*1.3);
+  document.getElementById('zoom-label').textContent=Math.round(dayWidth/40*100)+'%';
+  draw();
+});
+
+document.getElementById('btn-zoom-out').addEventListener('click',()=>{
+  dayWidth=Math.max(MIN_DAY_W,dayWidth/1.3);
+  document.getElementById('zoom-label').textContent=Math.round(dayWidth/40*100)+'%';
+  draw();
+});
+
+document.getElementById('btn-today').addEventListener('click',()=>{
+  viewStartDay=today()-5;
+  draw();
+});
+
+document.getElementById('btn-fit').addEventListener('click',()=>{
+  if(tasks.length===0)return;
+  let minD=Infinity,maxD=-Infinity;
+  tasks.forEach(t=>{minD=Math.min(minD,t.startDay);maxD=Math.max(maxD,t.startDay+t.days);});
+  const span=maxD-minD+2;
+  const w=timelineEl.getBoundingClientRect().width;
+  dayWidth=Math.max(MIN_DAY_W,Math.min(MAX_DAY_W,w/span));
+  viewStartDay=minD-1;
+  document.getElementById('zoom-label').textContent=Math.round(dayWidth/40*100)+'%';
+  draw();
+});
+
+document.getElementById('btn-export').addEventListener('click',()=>{
+  const link=document.createElement('a');
+  link.download='chronoforge-'+Date.now()+'.png';
+  link.href=canvas.toDataURL('image/png');
+  link.click();
+  showToast('Exported as PNG');
+});
+
+document.getElementById('btn-clear').addEventListener('click',()=>{
+  tasks=[];taskIdCounter=0;selectedTask=null;
+  rebuildSidebar();draw();
+});
+
+function showToast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2000);
+}
+
+/* ===================== Init ===================== */
+function initDemo(){
+  const base=today()-10;
+  addTask('Research',base,5,'#6c5ce7',100);
+  addTask('Design',base+4,7,'#00b894',80);
+  addTask('Frontend',base+10,12,'#74b9ff',40);
+  addTask('Backend',base+10,10,'#e17055',30);
+  addTask('Testing',base+20,5,'#fdcb6e',0);
+  addTask('Deploy',base+24,3,'#ff6b6b',0);
+  addTask('Documentation',base+15,8,'#a29bfe',10);
+  viewStartDay=base-2;
+}
+
+initDemo();
+addEventListener('resize',resize);
+resize();
+</script>
+</body>
+</html>
