@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://chronoforge-timeline.surge.sh/sitemap.xml
